@@ -1,0 +1,84 @@
+from state import AgentState, DiffAnalysis
+from langchain.chat_models import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def diff_intelligence(state: AgentState) -> AgentState:
+    try:
+        logger.info("Running Diff Intelligence Analyzer...")
+
+        # ✅ Prepare diff text from your structure
+        diff_text = ""
+
+        for file, data in state.git_diff.items():
+            diff_text += f"""
+File: {file}
+Status: {data.get("status")}
+Diff:
+{data.get("diff")}
+---------------------
+"""
+
+        # ✅ Prompt
+        prompt = ChatPromptTemplate.from_messages([
+            ("system",
+             """You are a senior software engineer and QA expert.
+
+Analyze the Pull Request diff and provide:
+
+1. Change Summary
+2. Risk Level (LOW / MEDIUM / HIGH)
+3. Business Impact
+4. Testing Areas
+
+Be concise and only use given information."""
+             ),
+            ("human",
+             """
+PR Title: {title}
+PR Description: {description}
+
+Code Changes:
+{diff}
+"""
+             )
+        ])
+
+        # ✅ LLM (you can swap with Qwen later)
+        llm = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0
+        )
+
+        chain = prompt | llm
+
+        # ✅ Call model
+        response = chain.invoke({
+            "title": state.pr_data.get("title"),
+            "description": state.pr_data.get("description"),
+            "diff": diff_text
+        })
+
+        output_text = response.content
+
+        # ✅ Basic parsing (simple since you're not using Pydantic parser here)
+        # You can improve later
+        analysis = DiffAnalysis(
+            change_summary=output_text,
+            risk_level="UNKNOWN",
+            business_impact="",
+            testing_areas=[]
+        )
+
+        state.analysis = analysis
+
+        return state
+
+    except Exception as e:
+        logger.error(f"Error in diff_intelligence: {str(e)}")
+        state.error = str(e)
+        return state
