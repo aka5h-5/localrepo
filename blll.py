@@ -9,6 +9,9 @@ tests/pages/Runs.test.tsx
 tests/theme.test.ts
 tests/types/run.test.ts
 tests/utils/runUtils.test.ts
+
+
+GITHUB_TOKEN = "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"
 tsconfig.json
 Traceback (most recent call last):
   File "c:\Users\akashs1\AI_testcase\tree.py", line 30, in <module>
