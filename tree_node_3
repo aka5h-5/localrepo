@@ -1,0 +1,42 @@
+from langgraph.graph import StateGraph, START, END
+
+from state import AgentState
+from node1 import load_repo_contents
+from node2 import get_diff
+from node3 import analyze_diff
+
+
+builder = StateGraph(AgentState)
+
+# Nodes
+builder.add_node("load_repo_contents", load_repo_contents)
+builder.add_node("get_diff", get_diff)
+builder.add_node("analyze_diff", analyze_diff)
+
+# Flow
+builder.add_edge(START, "load_repo_contents")
+builder.add_edge("load_repo_contents", "get_diff")
+builder.add_edge("get_diff", "analyze_diff")
+builder.add_edge("analyze_diff", END)
+
+graph = builder.compile()
+
+
+if __name__ == "__main__":
+
+    state = AgentState(
+        owner="TS-KAAG",
+        repository="visual-test-frontend",
+        pr_id=31
+    )
+
+    result = graph.invoke(state)
+
+    print("\n===== PR DETAILS =====")
+    print(result.pr_details)
+
+    print("\n===== CHANGED FILES =====")
+    print(result.changed_files)
+
+    print("\n===== DIFF SUMMARY =====")
+    print(result.change_summary)
