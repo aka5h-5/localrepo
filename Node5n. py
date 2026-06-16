@@ -1,0 +1,279 @@
+from tree_sitter import Parser
+from tree_sitter_languages import get_language
+from state import AgentState
+
+
+def node_text(content: str, node):
+    return content[node.start_byte:node.end_byte]
+
+
+def ast_analyzer(state: AgentState) -> AgentState:
+
+    ast_summary = {
+        "summary": {
+            "files_analyzed": 0
+        },
+        "files": {}
+    }
+
+    files = state.repository_contents or {}
+
+    # Language Selection
+    if state.language == "Python":
+        language_name = "python"
+        valid_ext = (".py",)
+
+    elif state.language == "JavaScript":
+        language_name = "javascript"
+        valid_ext = (".js", ".jsx")
+
+    elif state.language == "TypeScript":
+        language_name = "typescript"
+        valid_ext = (".ts", ".tsx")
+
+    else:
+        state.ast_summary = ast_summary
+        return state
+
+    parser = Parser()
+    parser.set_language(get_language(language_name))
+
+    # Process files
+    for path, content in files.items():
+
+        if not path.endswith(valid_ext):
+            continue
+
+        if not content.strip():
+            continue
+
+        file_ast = {
+            "classes": [],
+            "functions": [],
+            "methods": [],
+            "imports": [],
+            "routes": [],
+            "function_calls": [],
+            "decorators": [],
+            "tests": []
+        }
+
+        try:
+            tree = parser.parse(bytes(content, "utf8"))
+        except Exception:
+            continue
+
+        # Test file detection
+        if any(
+            x in path.lower()
+            for x in ["test", "spec", "__tests__"]
+        ):
+            file_ast["tests"].append(path)
+
+        stack = [tree.root_node]
+
+        while stack:
+
+            node = stack.pop()
+
+            # ==================================
+            # PYTHON
+            # ==================================
+            if state.language == "Python":
+
+                # Classes
+                if node.type == "class_definition":
+
+                    name = node.child_by_field_name("name")
+
+                    if name:
+                        file_ast["classes"].append(
+                            node_text(content, name)
+                        )
+
+                # Functions / Methods
+                elif node.type == "function_definition":
+
+                    name = node.child_by_field_name("name")
+
+                    if name:
+
+                        fn_name = node_text(content, name)
+
+                        parent = node.parent
+
+                        is_method = (
+                            parent
+                            and parent.type == "block"
+                            and parent.parent
+                            and parent.parent.type == "class_definition"
+                        )
+
+                        if is_method:
+                            file_ast["methods"].append(fn_name)
+                        else:
+                            file_ast["functions"].append(fn_name)
+
+                        if fn_name.startswith("test_"):
+                            file_ast["tests"].append(fn_name)
+
+                # Imports
+                elif node.type in (
+                    "import_statement",
+                    "import_from_statement"
+                ):
+
+                    file_ast["imports"].append(
+                        node_text(content, node)
+                    )
+
+                # Decorators & Routes
+                elif node.type == "decorated_definition":
+
+                    snippet = node_text(content, node)
+
+                    file_ast["decorators"].append(
+                        snippet.split("\n")[0]
+                    )
+
+                    for method in [
+                        "get",
+                        "post",
+                        "put",
+                        "delete",
+                        "patch"
+                    ]:
+
+                        if f".{method}(" in snippet:
+
+                            file_ast["routes"].append(
+                                f"{method.upper()} route"
+                            )
+
+                    if "@app.route" in snippet:
+                        file_ast["routes"].append(
+                            "Flask Route"
+                        )
+
+                # Function Calls
+                elif node.type == "call":
+
+                    fn = node.child_by_field_name("function")
+
+                    if fn:
+
+                        file_ast["function_calls"].append(
+                            node_text(content, fn)
+                        )
+
+            # ==================================
+            # JAVASCRIPT / TYPESCRIPT
+            # ==================================
+            else:
+
+                # Classes
+                if node.type == "class_declaration":
+
+                    name = node.child_by_field_name("name")
+
+                    if name:
+
+                        file_ast["classes"].append(
+                            node_text(content, name)
+                        )
+
+                # Functions
+                elif node.type == "function_declaration":
+
+                    name = node.child_by_field_name("name")
+
+                    if name:
+
+                        file_ast["functions"].append(
+                            node_text(content, name)
+                        )
+
+                # Methods
+                elif node.type == "method_definition":
+
+                    name = node.child_by_field_name("name")
+
+                    if name:
+
+                        file_ast["methods"].append(
+                            node_text(content, name)
+                        )
+
+                # Imports
+                elif node.type == "import_statement":
+
+                    file_ast["imports"].append(
+                        node_text(content, node)
+                    )
+
+                # Arrow Functions
+                elif node.type == "lexical_declaration":
+
+                    snippet = node_text(content, node)
+
+                    if "=>" in snippet:
+
+                        file_ast["functions"].append(
+                            snippet[:100]
+                        )
+
+                # Function Calls / Routes / Tests
+                elif node.type == "call_expression":
+
+                    fn = node.child_by_field_name("function")
+
+                    if fn:
+
+                        file_ast["function_calls"].append(
+                            node_text(content, fn)
+                        )
+
+                    snippet = node_text(content, node)
+
+                    route_patterns = [
+                        ".get(",
+                        ".post(",
+                        ".put(",
+                        ".delete(",
+                        ".patch("
+                    ]
+
+                    if any(
+                        p in snippet
+                        for p in route_patterns
+                    ):
+                        file_ast["routes"].append(
+                            snippet[:100]
+                        )
+
+                    if (
+                        snippet.startswith("describe(")
+                        or snippet.startswith("it(")
+                        or snippet.startswith("test(")
+                    ):
+                        file_ast["tests"].append(
+                            snippet[:100]
+                        )
+
+            stack.extend(node.children)
+
+        # Remove duplicates per file
+        for key in file_ast:
+            file_ast[key] = list(
+                dict.fromkeys(file_ast[key])
+            )
+
+        ast_summary["files"][path] = file_ast
+
+    ast_summary["summary"]["files_analyzed"] = len(
+        ast_summary["files"]
+    )
+
+    state.ast_summary = ast_summary
+
+    return state
